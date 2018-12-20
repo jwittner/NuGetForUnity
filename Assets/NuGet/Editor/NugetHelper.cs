@@ -325,7 +325,7 @@
                 // If we have not selected unity frameworks then we want just the highest priority framework.
                 if (compatibleDirectoryNameList.Any() && !compatibleDirectoryNameList.First().Contains("unity"))
                 {
-                   compatibleDirectoryNameList = compatibleDirectoryNameList.Take(1);
+                    compatibleDirectoryNameList = compatibleDirectoryNameList.Take(1);
                 }
 
                 // Convert to a dictionary to make testing quicker
@@ -334,7 +334,7 @@
                 var selectedDirectories = libDirectories.Where(d => compatibleDirectoryNameSet.ContainsKey(d.Name.ToLower()));
                 if (libDirectories.Any() && !selectedDirectories.Any())
                 {
-                    Debug.LogErrorFormat("NuGet package {0} {1} has libs, but none compatible with current Unity target framework", package.Id, package.Version);
+                    throw new Exception(string.Format("NuGet package {0} {1} has libs, but none compatible with current Unity target framework", package.Id, package.Version));
                 }
 
                 foreach (var dir in selectedDirectories)
@@ -968,25 +968,6 @@
             bool using46 = intDotNetVersion == 3; // NET_4_6 = 3 in Unity 5.6 and Unity 2017.1 - use the hard-coded int value to ensure it works in earlier versions of Unity
             bool usingStandard2 = intDotNetVersion == 6; // using .net standard 2.0
 
-
-            Regex[] frameworksUnity;
-            if (usingStandard2 || using46)
-            {
-                frameworksUnity = new Regex[]
-                {
-                    new Regex("^unity$", RegexOptions.IgnoreCase),
-                };
-            }
-            else
-            {
-                frameworksUnity = new Regex[]
-                {
-                    new Regex("^unity$", RegexOptions.IgnoreCase),
-                    new Regex(@"^net35-unity (full|subset) v3.5$", RegexOptions.IgnoreCase),
-                };
-            }
-
-
             Regex[] frameworksCommon;
             Version firstInvalidVersion;
             Version firstValidVersion = new Version(0, 0);
@@ -995,10 +976,13 @@
                 frameworksCommon = new Regex[]
                 {
                     new Regex(@"^\.NETStandard(\d+)\.(\d+)$", RegexOptions.IgnoreCase),
-                    new Regex(@"^netstandard(\d+)\.(\d+)$", RegexOptions.IgnoreCase)
+                    new Regex(@"^netstandard(\d+)\.(\d+)$", RegexOptions.IgnoreCase),
                 };
-                firstInvalidVersion = new Version(2,1);
-                if( strictFrameworkVersion) { firstValidVersion = new Version(2, 0); }
+                firstInvalidVersion = new Version(2, 1);
+                if (strictFrameworkVersion)
+                {
+                    firstValidVersion = new Version(2, 0);
+                }
             }
             else
             {
@@ -1006,12 +990,13 @@
                 {
                     new Regex(@"^\.NETFramework(\d+)\.(\d+)\.?(\d+)?$", RegexOptions.IgnoreCase),
                     new Regex(@"^net(\d)(\d)(\d)?$", RegexOptions.IgnoreCase),
+                    new Regex(@"^net(\d)(\d)-unity [full|subset] v3.5$", RegexOptions.IgnoreCase),
                 };
 
                 if (using46)
                 {
                     firstInvalidVersion = new Version(4, 7);
-                    if( strictFrameworkVersion) { firstValidVersion = new Version(4, 6); }
+                    if (strictFrameworkVersion) { firstValidVersion = new Version(4, 6); }
                 }
                 else
                 {
@@ -1038,32 +1023,25 @@
                 return new Version(major, minor);
             };
 
-            // First look for an explicit Unity target framework
-            IEnumerable<string> frameworks = availableFrameworks
-                .Where(g => frameworksUnity.Where(r => r.IsMatch(g)).Any());
 
-            // If that fails search for the allowable common frameworks
-            if (!frameworks.Any())
-            {
-                var matches = availableFrameworks
-                    .SelectMany(g => frameworksCommon.Select(f => f.Matches(g)))
-                    .ToList()
-                    .Where(m => m.Count >= 1)
-                    .Select(m => m[0].Groups)
-                    .Where(g => g != null && g.Count >= 3)
-                    .Where(g => { var v = GetVersion(g); return v < firstInvalidVersion && v >= firstValidVersion; } );
+            var matches = availableFrameworks
+                .SelectMany(g => frameworksCommon.Select(f => f.Matches(g)))
+                .ToList()
+                .Where(m => m.Count >= 1)
+                .Select(m => m[0].Groups)
+                .Where(g => g != null && g.Count >= 3)
+                .Where(g => { var v = GetVersion(g); return v < firstInvalidVersion && v >= firstValidVersion; });
 
-                frameworks = matches
-                    .OrderByDescending(g => GetVersion(g))
-                    .Select(g => g[0].Value);
-            }
+            IEnumerable<string> frameworks = matches
+                .OrderByDescending(g => GetVersion(g))
+                .ThenBy(g => g[0].Value.ToLower().Contains("unity") ? 1 : 0)
+                .Select(g => g[0].Value);
 
             // If no group, then see if a global dependency group is specified
             if (!frameworks.Any())
             {
                 frameworks = availableFrameworks.Where(a => a == string.Empty);
             }
-
 
             return frameworks;
         }
@@ -1229,6 +1207,8 @@
             {
                 WarnIfDotNetAuthenticationIssue(e);
                 Debug.LogErrorFormat("Unable to install package {0} {1}\n{2}", package.Id, package.Version, e.ToString());
+
+                Uninstall(package);
                 installSuccess = false;
             }
             finally
