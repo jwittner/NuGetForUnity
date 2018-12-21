@@ -385,7 +385,7 @@
         private void UpdateUpdatePackages()
         {
             // get any available updates for the installed packages
-            updatePackages = NugetHelper.GetUpdates(NugetHelper.InstalledPackages, showPrereleaseUpdates, showAllUpdateVersions);
+            updatePackages = NugetHelper.GetUpdates(showAllUpdateVersions);
             filteredUpdatePackages = updatePackages;
 
             if (updatesSearchTerm != "Search")

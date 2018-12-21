@@ -152,7 +152,7 @@ public class NuGetTests
     {
         var id = new NugetPackageIdentifier("TestPackage", versionRange);
 
-        Assert.IsTrue(id.InRange(version), "{0} was NOT in range of {1}!", version, versionRange);
+        Assert.IsTrue(VersionRange.CompareVersion(version, versionRange) == 0, "{0} was NOT in range of {1}!", version, versionRange);
     }
 
     [Test]
@@ -169,6 +169,6 @@ public class NuGetTests
     {
         var id = new NugetPackageIdentifier("TestPackage", versionRange);
 
-        Assert.IsFalse(id.InRange(version), "{0} WAS in range of {1}!", version, versionRange);
+        Assert.IsFalse(VersionRange.CompareVersion(version, versionRange) == 0, "{0} WAS in range of {1}!", version, versionRange);
     }
 }

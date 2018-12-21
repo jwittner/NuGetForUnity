@@ -602,7 +602,7 @@
             LogVerbose("Uninstalling: {0} {1}", package.Id, package.Version);
 
             // update the package.config file
-            PackagesConfigFile.RemovePackage(package);
+            PackagesConfigFile.RemovePackage(package.Id);
             PackagesConfigFile.Save(PackagesConfigFilePath);
 
             string packageInstallDirectory = Path.Combine(NugetConfigFile.RepositoryPath, string.Format("{0}.{1}", package.Id, package.Version));
@@ -755,16 +755,16 @@
         /// <param name="includePrerelease">True to include prerelease packages (alpha, beta, etc).</param>
         /// <param name="includeAllVersions">True to include older versions that are not the latest version.</param>
         /// <param name="targetFrameworks">The specific frameworks to target?</param>
-        /// <param name="versionContraints">The version constraints?</param>
+        /// <param name="versionRange">The version constraints?</param>
         /// <returns>A list of all updates available.</returns>
-        public static List<NugetPackage> GetUpdates(IEnumerable<NugetPackage> packagesToUpdate, bool includePrerelease = false, bool includeAllVersions = false, string targetFrameworks = "", string versionContraints = "")
+        public static List<NugetPackage> GetUpdates(bool includePrerelease = false, bool includeAllVersions = false)
         {
             List<NugetPackage> packages = new List<NugetPackage>();
 
             // Loop through all active sources and combine them into a single list
             foreach (var source in packageSources.Where(s => s.IsEnabled))
             {
-                var newPackages = source.GetUpdates(packagesToUpdate, includePrerelease, includeAllVersions, targetFrameworks, versionContraints);
+                var newPackages = source.GetUpdates(PackagesConfigFile.Packages, includePrerelease, includeAllVersions);
                 packages.AddRange(newPackages);
                 packages = packages.Distinct().ToList();
             }
@@ -866,7 +866,7 @@
             // Loop through all active sources and stop once the package is found
             foreach (var source in packageSources.Where(s => s.IsEnabled))
             {
-                var foundPackage = source.GetSpecificPackage(packageId);
+                var foundPackage = source.FindPackageById(packageId);
                 if (foundPackage == null)
                 {
                     continue;
@@ -962,6 +962,17 @@
             }
         }
 
+        private static string GetTargetFrameworkName()
+        {
+            int intDotNetVersion = (int)DotNetVersion;
+
+            // NET_4_6 = 3 in Unity 5.6 and Unity 2017.1 - use the hard-coded int value to ensure it works in earlier versions of Unity
+            if ( intDotNetVersion == 3 ) { return "net46"; }
+            else if( intDotNetVersion == 6 ) { return "netstandard2.0"; }
+
+            return "net35";
+        }
+
         private static IEnumerable<string> SelectCompatibleFrameworks(IEnumerable<string> availableFrameworks, bool strictFrameworkVersion)
         {
             int intDotNetVersion = (int)DotNetVersion;
@@ -969,43 +980,43 @@
             bool usingStandard2 = intDotNetVersion == 6; // using .net standard 2.0
 
             Regex[] frameworksCommon;
-            Version firstInvalidVersion;
-            Version firstValidVersion = new Version(0, 0);
+            System.Version firstInvalidVersion;
+            var firstValidVersion = new System.Version(0, 0);
             if (usingStandard2)
             {
                 frameworksCommon = new Regex[]
                 {
-                    new Regex(@"^\.NETStandard(\d+)\.(\d+)$", RegexOptions.IgnoreCase),
-                    new Regex(@"^netstandard(\d+)\.(\d+)$", RegexOptions.IgnoreCase),
+                    new Regex(@"^\.NETStandard(\d+)\.(\d+)", RegexOptions.IgnoreCase),
+                    new Regex(@"^netstandard(\d+)\.(\d+)", RegexOptions.IgnoreCase),
                 };
-                firstInvalidVersion = new Version(2, 1);
+                firstInvalidVersion = new System.Version(2, 1);
                 if (strictFrameworkVersion)
                 {
-                    firstValidVersion = new Version(2, 0);
+                    firstValidVersion = new System.Version(2, 0);
                 }
             }
             else
             {
                 frameworksCommon = new Regex[]
                 {
-                    new Regex(@"^\.NETFramework(\d+)\.(\d+)\.?(\d+)?$", RegexOptions.IgnoreCase),
-                    new Regex(@"^net(\d)(\d)(\d)?$", RegexOptions.IgnoreCase),
-                    new Regex(@"^net(\d)(\d)-unity [full|subset] v3.5$", RegexOptions.IgnoreCase),
+                    new Regex(@"^\.NETFramework(\d+)\.(\d+)[\.(\d+)]?", RegexOptions.IgnoreCase),
+                    new Regex(@"^net(\d)(\d)(\d)?", RegexOptions.IgnoreCase),
+                    new Regex(@"^net(\d)(\d)-unity [full|subset] v3.5", RegexOptions.IgnoreCase),
                 };
 
                 if (using46)
                 {
-                    firstInvalidVersion = new Version(4, 7);
-                    if (strictFrameworkVersion) { firstValidVersion = new Version(4, 6); }
+                    firstInvalidVersion = new System.Version(4, 7);
+                    if (strictFrameworkVersion) { firstValidVersion = new System.Version(4, 6); }
                 }
                 else
                 {
-                    firstInvalidVersion = new Version(3, 6);
-                    if (strictFrameworkVersion) { firstValidVersion = new Version(3, 5); }
+                    firstInvalidVersion = new System.Version(3, 6);
+                    if (strictFrameworkVersion) { firstValidVersion = new System.Version(3, 5); }
                 }
             }
 
-            Func<GroupCollection, Version> GetVersion = (gc) =>
+            Func<GroupCollection, System.Version> GetVersion = (gc) =>
             {
                 Func<int, int> GetGroupValue = i =>
                 {
@@ -1018,9 +1029,9 @@
                 int minor = GetGroupValue(2);
                 int revision = GetGroupValue(3);
 
-                if (revision != -1) { return new Version(major, minor, revision); }
+                if (revision != -1) { return new System.Version(major, minor, revision); }
 
-                return new Version(major, minor);
+                return new System.Version(major, minor);
             };
 
 

@@ -43,10 +43,8 @@ namespace NugetForUnity
         /// </summary>
         /// <param name="document">The <see cref="XDocument"/> that is the OData XML response from the NuGet server.</param>
         /// <returns>The list of <see cref="NugetPackage"/>s read from the given XML.</returns>
-        public static List<NugetPackage> Parse(XDocument document)
+        public static IEnumerable<NugetPackage> Parse(XDocument document)
         {
-            List<NugetPackage> packages = new List<NugetPackage>();
-
             var packageEntries = document.Root.Elements(XName.Get("entry", AtomNamespace));
             foreach (var entry in packageEntries)
             {
@@ -115,10 +113,8 @@ namespace NugetForUnity
                     }
                 }
 
-                packages.Add(package);
+                yield return package;
             }
-
-            return packages;
         }
     }
 }

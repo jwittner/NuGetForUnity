@@ -96,33 +96,55 @@
             IsEnabled = true;
         }
 
-        /// <summary>
-        /// Gets a NugetPackage from the NuGet server that matches (or is in range of) the <see cref="NugetPackageIdentifier"/> given.
-        /// If an exact match isn't found, it selects the next closest version available.
-        /// </summary>
-        /// <param name="package">The <see cref="NugetPackageIdentifier"/> containing the ID and Version of the package to get.</param>
-        /// <returns>The retrieved package, if there is one.  Null if no matching package was found.</returns>
-        public List<NugetPackage> FindPackagesById(NugetPackageIdentifier package)
+        public NugetPackage FindPackageById(NugetPackageIdentifier package)
         {
-            List<NugetPackage> foundPackages = null;
-
             if (IsLocalPath)
             {
                 string localPackagePath = System.IO.Path.Combine(ExpandedPath, string.Format("./{0}.{1}.nupkg", package.Id, package.Version));
                 if (File.Exists(localPackagePath))
                 {
-                    NugetPackage localPackage = NugetPackage.FromNupkgFile(localPackagePath);
-                    foundPackages = new List<NugetPackage> { localPackage };
+                    return NugetPackage.FromNupkgFile(localPackagePath);
                 }
-                else
-                {
-                    // TODO: Sort the local packages?  Currently assuming they are in alphabetical order due to the filesystem.
-                    // TODO: Optimize to no longer use GetLocalPackages, since that loads the .nupkg itself
 
-                    // Try to find later versions of the same package
-                    var packages = GetLocalPackages(package.Id, true, true);
-                    foundPackages = new List<NugetPackage>(packages.SkipWhile(x => !package.InRange(x)));
-                  }
+                return null;
+            }
+            else
+            {
+                // See here: http://www.odata.org/documentation/odata-version-2-0/uri-conventions/
+                string url = string.Empty;
+
+                url = string.Format("{0}FindPackagesById()?$id='{1}'&$filter=Version eq {2}", ExpandedPath, package.Id, package.Version);
+
+                try
+                {
+                    var foundPackages = GetPackagesFromUrl(url, ExpandedPassword);
+                    return foundPackages.FirstOrDefault();
+                }
+                catch (System.Exception e)
+                {
+                    Debug.LogErrorFormat("Unable to retrieve packages from {0}\n{1}", url, e.ToString());
+                    return null;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Gets a NugetPackage from the NuGet server that is in the range given.
+        /// </summary>
+        /// <param name="package">The <see cref="NugetPackageIdentifier"/> containing the ID and Version of the package to get.</param>
+        /// <returns>The retrieved package, if there is one.  Null if no matching package was found.</returns>
+        public IEnumerable<NugetPackage> FindPackagesById(string id, string versionRange, bool includePrerelease)
+        {
+            List<NugetPackage> foundPackages = null;
+
+            if (IsLocalPath)
+            {
+                // TODO: Sort the local packages?  Currently assuming they are in alphabetical order due to the filesystem.
+                // TODO: Optimize to no longer use GetLocalPackages, since that loads the .nupkg itself
+
+                // Try to find later versions of the same package
+                var packages = FindLocalPackages(id, true, includePrerelease);
+                foundPackages = new List<NugetPackage>(packages.SkipWhile(x => !package.InRange(x)));
             }
             else
             {
@@ -171,17 +193,6 @@
             }
 
             return foundPackages;
-        }
-
-        /// <summary>
-        /// Gets a NugetPackage from the NuGet server that matches (or is in range of) the <see cref="NugetPackageIdentifier"/> given.
-        /// If an exact match isn't found, it selects the next closest version available.
-        /// </summary>
-        /// <param name="package">The <see cref="NugetPackageIdentifier"/> containing the ID and Version of the package to get.</param>
-        /// <returns>The retrieved package, if there is one.  Null if no matching package was found.</returns>
-        public NugetPackage GetSpecificPackage(NugetPackageIdentifier package)
-        {
-            return FindPackagesById(package).FirstOrDefault();
         }
 
         /// <summary>
@@ -263,65 +274,39 @@
         /// <param name="numberToGet">The number of packages to fetch.</param>
         /// <param name="numberToSkip">The number of packages to skip before fetching.</param>
         /// <returns>The list of available packages.</returns>
-        private List<NugetPackage> GetLocalPackages(string searchTerm = "", bool includeAllVersions = false, bool includePrerelease = false, int numberToGet = 15, int numberToSkip = 0)
+        private IEnumerable<NugetPackage> FindLocalPackages(string searchTerm = "", bool includeAllVersions = false, bool includePrerelease = false)
         {
-            List<NugetPackage> localPackages = new List<NugetPackage>();
-
-            if (numberToSkip != 0)
-            {
-                // we return the entire list the first time, so no more to add
-                return localPackages;
-            }
-
             string path = ExpandedPath;
 
-            if (Directory.Exists(path))
-            {
-                string[] packagePaths = Directory.GetFiles(path, string.Format("*{0}*.nupkg", searchTerm));
-
-                foreach (var packagePath in packagePaths)
-                {
-                    var package = NugetPackage.FromNupkgFile(packagePath);
-                    package.PackageSource = this;
-
-                    if (package.IsPrerelease && !includePrerelease)
-                    {
-                        // if it's a prerelease package and we aren't supposed to return prerelease packages, just skip it
-                        continue;
-                    }
-
-                    if (includeAllVersions)
-                    {
-                        // if all versions are being included, simply add it and move on
-                        localPackages.Add(package);
-                        //LogVerbose("Adding {0} {1}", package.Id, package.Version);
-                        continue;
-                    }
-
-                    var existingPackage = localPackages.FirstOrDefault(x => x.Id == package.Id);
-                    if (existingPackage != null)
-                    {
-                        // there is already a package with the same ID in the list
-                        if (existingPackage < package)
-                        {
-                            // if the current package is newer than the existing package, swap them
-                            localPackages.Remove(existingPackage);
-                            localPackages.Add(package);
-                        }
-                    }
-                    else
-                    {
-                        // there is no package with the same ID in the list yet
-                        localPackages.Add(package);
-                    }
-                }
-            }
-            else
+            if (!Directory.Exists(path))
             {
                 Debug.LogErrorFormat("Local folder not found: {0}", path);
+                return Enumerable.Empty<NugetPackage>();
             }
 
-            return localPackages;
+            string[] packagePaths = Directory.GetFiles(path, string.Format("{0}.*.nupkg", searchTerm));
+
+            IEnumerable<NugetPackage> packages = packagePaths.Select(p =>
+            {
+                var package = NugetPackage.FromNupkgFile(p);
+                package.PackageSource = this;
+                return package;
+
+            }).ToList();
+
+            if (!includePrerelease)
+            {
+                packages = packages.Where(p => !p.IsPrerelease);
+            }
+
+            if (!includeAllVersions)
+            {
+                packages = packages.GroupBy(p => p.Id).Select(g => g.OrderByDescending(p => p).First());
+            }
+
+            packages = packages.OrderByDescending(p => p);
+
+            return packages;
         }
 
         /// <summary>
@@ -332,14 +317,12 @@
         /// <param name="url"></param>
         /// <param name="password"></param>
         /// <returns></returns>
-        private List<NugetPackage> GetPackagesFromUrl(string url, string password)
+        private IEnumerable<NugetPackage> GetPackagesFromUrl(string url, string password)
         {
             NugetHelper.LogVerbose("Getting packages from: {0}", url);
 
             Stopwatch stopwatch = new Stopwatch();
             stopwatch.Start();
-
-            List<NugetPackage> packages = new List<NugetPackage>();
 
             // Mono doesn't have a Certificate Authority, so we have to provide all validation manually.  Currently just accept anything.
             // See here: http://stackoverflow.com/questions/4926676/mono-webrequest-fails-with-https
@@ -352,102 +335,54 @@
 
             Stream responseStream = NugetHelper.RequestUrl(url, password, timeOut: 5000);
             StreamReader streamReader = new StreamReader(responseStream);
-
-            packages = NugetODataResponse.Parse(XDocument.Load(streamReader));
-
-            foreach (var package in packages)
-            {
-                package.PackageSource = this;
-            }
+            var document = XDocument.Load(streamReader);
 
             stopwatch.Stop();
-            NugetHelper.LogVerbose("Retreived {0} packages in {1} ms", packages.Count, stopwatch.ElapsedMilliseconds);
+            NugetHelper.LogVerbose("Retreived packages in {1} ms", stopwatch.ElapsedMilliseconds);
 
-            return packages;
+            foreach (var package in NugetODataResponse.Parse(document))
+            {
+                package.PackageSource = this;
+                yield return package;
+            }
         }
 
-        /// <summary>
-        /// Gets a list of available packages from a local source (not a web server) that are upgrades for the given list of installed packages.
-        /// </summary>
-        /// <param name="installedPackages">The list of currently installed packages to use to find updates.</param>
-        /// <param name="includePrerelease">True to include prerelease packages (alpha, beta, etc).</param>
-        /// <param name="includeAllVersions">True to include older versions that are not the latest version.</param>
-        /// <returns>A list of all updates available.</returns>
-        private List<NugetPackage> GetLocalUpdates(IEnumerable<NugetPackage> installedPackages, bool includePrerelease = false, bool includeAllVersions = false)
+        private IEnumerable<NugetPackage> GetLocalUpdates(IEnumerable<PackagesConfigFile.Package> toUpdate, bool includePrerelease = false, bool includeAllVersions = false)
         {
-            List<NugetPackage> updates = new List<NugetPackage>();
-
-            var availablePackages = GetLocalPackages(string.Empty, includeAllVersions, includePrerelease);
-            foreach (var installedPackage in installedPackages)
+            foreach (var package in toUpdate)
             {
-                foreach (var availablePackage in availablePackages)
+                var availablePackages = FindLocalPackages(package.Id, includeAllVersions, includePrerelease)
+                    .Where(p => Version.Compare(p.Version, package.Version) > 0);
+
+                foreach (var newPackage in availablePackages)
                 {
-                    if (installedPackage.Id == availablePackage.Id)
-                    {
-                        if (installedPackage < availablePackage)
-                        {
-                            updates.Add(availablePackage);
-                        }
-                    }
+                    yield return newPackage;
                 }
             }
-
-            return updates;
         }
 
-        /// <summary>
-        /// Queries the source with the given list of installed packages to get any updates that are available.
-        /// </summary>
-        /// <param name="installedPackages">The list of currently installed packages.</param>
-        /// <param name="includePrerelease">True to include prerelease packages (alpha, beta, etc).</param>
-        /// <param name="includeAllVersions">True to include older versions that are not the latest version.</param>
-        /// <param name="targetFrameworks">The specific frameworks to target?</param>
-        /// <param name="versionContraints">The version constraints?</param>
-        /// <returns>A list of all updates available.</returns>
-        public List<NugetPackage> GetUpdates(IEnumerable<NugetPackage> installedPackages, bool includePrerelease = false, bool includeAllVersions = false, string targetFrameworks = "", string versionContraints = "")
-        {
-            if (IsLocalPath)
-            {
-                return GetLocalUpdates(installedPackages, includePrerelease, includeAllVersions);
-            }
 
-            List<NugetPackage> updates = new List<NugetPackage>();
+        private IEnumerable<NugetPackage> GetOnlineUpdates(IEnumerable<PackagesConfigFile.Package> toUpdate, bool includePrerelease = false, bool includeAllVersions = false)
+        {
+            IEnumerable<NugetPackage> packages = Enumerable.Empty<NugetPackage>();
 
             // check for updates in groups of 10 instead of all of them, since that causes servers to throw errors for queries that are too long
-            for (int i = 0; i < installedPackages.Count(); i += 10)
+            while (toUpdate.Any())
             {
-                var packageGroup = installedPackages.Skip(i).Take(10);
+                var packageGroup = toUpdate.Take(10);
+                toUpdate = toUpdate.Skip(10);
 
-                string packageIds = string.Empty;
-                string versions = string.Empty;
+                string packageIds = string.Join("|", packageGroup.Select(p => p.Id));
+                string versions = string.Join("|", packageGroup.Select(p => p.Version));
+                string targetFrameworks = string.Join("|", packageGroup.Select(p => p.TargetFramework));
+                string allowedVersions = string.Join("|", packageGroup.Select(p => p.AllowedVersions));
 
-                foreach (var package in packageGroup)
-                {
-                    if (string.IsNullOrEmpty(packageIds))
-                    {
-                        packageIds += package.Id;
-                    }
-                    else
-                    {
-                        packageIds += "|" + package.Id;
-                    }
+                string url = string.Format("{0}GetUpdates()?packageIds='{1}'&versions='{2}'&includePrerelease={3}&includeAllVersions={4}&targetFrameworks='{5}'&versionConstraints='{6}'", ExpandedPath, packageIds, versions, includePrerelease.ToString().ToLower(), includeAllVersions.ToString().ToLower(), targetFrameworks, allowedVersions);
 
-                    if (string.IsNullOrEmpty(versions))
-                    {
-                        versions += package.Version;
-                    }
-                    else
-                    {
-                        versions += "|" + package.Version;
-                    }
-                }
-
-                string url = string.Format("{0}GetUpdates()?packageIds='{1}'&versions='{2}'&includePrerelease={3}&includeAllVersions={4}&targetFrameworks='{5}'&versionConstraints='{6}'", ExpandedPath, packageIds, versions, includePrerelease.ToString().ToLower(), includeAllVersions.ToString().ToLower(), targetFrameworks, versionContraints);
 
                 try
                 {
-                    var newPackages = GetPackagesFromUrl(url, ExpandedPassword);
-                    updates.AddRange(newPackages);
+                    packages = packages.Concat(GetPackagesFromUrl(url, ExpandedPassword));
                 }
                 catch (System.Exception e)
                 {
@@ -457,7 +392,84 @@
                     {
                         // Some web services, such as VSTS don't support the GetUpdates API. Attempt to retrieve updates via FindPackagesById.
                         NugetHelper.LogVerbose("{0} not found. Falling back to FindPackagesById.", url);
-                        return GetUpdatesFallback(installedPackages, includePrerelease, includeAllVersions, targetFrameworks, versionContraints);
+                        packages.Concat(GetOnlineUpdatesFallback(packageGroup, includePrerelease, includeAllVersions));
+                    }
+
+                    Debug.LogErrorFormat("Unable to retrieve package list from {0}\n{1}", url, e.ToString());
+                }
+            }
+
+
+            return packages.OrderByDescending(p => p);
+        }
+
+
+        private IEnumerable<NugetPackage> GetOnlineUpdatesFallback(IEnumerable<PackagesConfigFile.Package> toUpdate, bool includePrerelease = false, bool includeAllVersions = false)
+        {
+            foreach (var package in toUpdate)
+            {
+                string versionRange = string.Format("({0},{1}", package.Version); // Minimum of Current ID (exclusive) with no maximum (exclusive).
+                //NugetPackageIdentifier id = new NugetPackageIdentifier(installedPackage.Id, versionRange); 
+                packageUpdates = FindPackagesById(id, versionRange, includePrerelease);
+
+                NugetPackage mostRecentPrerelease = includePrerelease ? packageUpdates.FindLast(p => p.IsPrerelease) : default(NugetPackage);
+                packageUpdates.RemoveAll(p => p.IsPrerelease && p != mostRecentPrerelease);
+
+                if (!includeAllVersions && packageUpdates.Count > 0)
+                {
+                    packageUpdates.RemoveRange(0, packageUpdates.Count - 1);
+                }
+
+                updates.AddRange(packageUpdates);
+            }
+
+            return updates;
+        }
+
+        /// <summary>
+        /// Queries the source with the given list of installed packages to get any updates that are available.
+        /// </summary>
+        /// <param name="toUpdate">The list of currently installed packages.</param>
+        /// <param name="includePrerelease">True to include prerelease packages (alpha, beta, etc).</param>
+        /// <param name="includeAllVersions">True to include older versions that are not the latest version.</param>
+        /// <param name="targetFrameworks">The specific frameworks to target?</param>
+        /// <param name="versionRange">The version constraints?</param>
+        /// <returns>A list of all updates available.</returns>
+        public IEnumerable<NugetPackage> GetUpdates(IEnumerable<PackagesConfigFile.Package> toUpdate, bool includePrerelease = false, bool includeAllVersions = false)
+        {
+            if (IsLocalPath)
+            {
+                return GetLocalUpdates(toUpdate, includePrerelease, includeAllVersions);
+            }
+
+            // check for updates in groups of 10 instead of all of them, since that causes servers to throw errors for queries that are too long
+            for (int i = 0; i < toUpdate.Count(); i += 10)
+            {
+                var packageGroup = toUpdate.Skip(i).Take(10);
+
+                string packageIds = string.Join("|", packageGroup.Select(p => p.Id));
+                string versions = string.Join("|", packageGroup.Select(p => p.Version));
+                string targetFrameworks = string.Join("|", packageGroup.Select(p => p.TargetFramework));
+                string allowedVersions = string.Join("|", packageGroup.Select(p => p.AllowedVersions));
+
+                string url = string.Format("{0}GetUpdates()?packageIds='{1}'&versions='{2}'&includePrerelease={3}&includeAllVersions={4}&targetFrameworks='{5}'&versionConstraints='{6}'", ExpandedPath, packageIds, versions, includePrerelease.ToString().ToLower(), includeAllVersions.ToString().ToLower(), targetFrameworks, allowedVersions);
+
+                try
+                {
+                    foreach (var package in GetPackagesFromUrl(url, ExpandedPassword))
+                    {
+                        yield return pac
+                    }
+                }
+                catch (System.Exception e)
+                {
+                    WebException webException = e as WebException;
+                    HttpWebResponse webResponse = webException != null ? webException.Response as HttpWebResponse : null;
+                    if (webResponse != null && webResponse.StatusCode == HttpStatusCode.NotFound)
+                    {
+                        // Some web services, such as VSTS don't support the GetUpdates API. Attempt to retrieve updates via FindPackagesById.
+                        NugetHelper.LogVerbose("{0} not found. Falling back to FindPackagesById.", url);
+                        return GetUpdatesFallback(toUpdate, includePrerelease, includeAllVersions, targetFrameworks, versionRange);
                     }
 
                     Debug.LogErrorFormat("Unable to retrieve package list from {0}\n{1}", url, e.ToString());
@@ -522,40 +534,5 @@
             }
         }
 
-        /// <summary>
-        /// Some NuGet feeds such as Visual Studio Team Services do not implement the GetUpdates function.
-        /// In that case this fallback function can be used to retrieve updates by using the FindPackagesById function.
-        /// </summary>
-        /// <param name="installedPackages">The list of currently installed packages.</param>
-        /// <param name="includePrerelease">True to include prerelease packages (alpha, beta, etc).</param>
-        /// <param name="includeAllVersions">True to include older versions that are not the latest version.</param>
-        /// <param name="targetFrameworks">The specific frameworks to target?</param>
-        /// <param name="versionContraints">The version constraints?</param>
-        /// <returns>A list of all updates available.</returns>
-        private List<NugetPackage> GetUpdatesFallback(IEnumerable<NugetPackage> installedPackages, bool includePrerelease = false, bool includeAllVersions = false, string targetFrameworks = "", string versionContraints = "")
-        {
-            Debug.Assert(string.IsNullOrEmpty(targetFrameworks) && string.IsNullOrEmpty(versionContraints)); // These features are not supported by this version of GetUpdates.
-
-            List<NugetPackage> updates = new List<NugetPackage>();
-            foreach (NugetPackage installedPackage in installedPackages)
-            {
-                List<NugetPackage> packageUpdates = new List<NugetPackage>();
-                string versionRange = string.Format("({0},)", installedPackage.Version); // Minimum of Current ID (exclusive) with no maximum (exclusive).
-                NugetPackageIdentifier id = new NugetPackageIdentifier(installedPackage.Id, versionRange); 
-                packageUpdates = FindPackagesById(id);
-
-                NugetPackage mostRecentPrerelease = includePrerelease ? packageUpdates.FindLast(p => p.IsPrerelease) : default(NugetPackage);
-                packageUpdates.RemoveAll(p => p.IsPrerelease && p != mostRecentPrerelease);
-
-                if (!includeAllVersions && packageUpdates.Count > 0)
-                {
-                    packageUpdates.RemoveRange(0, packageUpdates.Count - 1);
-                }
-
-                updates.AddRange(packageUpdates);
-            }
-
-            return updates;
-        }
     }
 }
