@@ -242,7 +242,9 @@
             url += "targetFramework=''&";
 
             // should we include prerelease packages?
-            url += string.Format("includePrerelease={0}", includePrerelease.ToString().ToLower());
+            url += string.Format("includePrerelease={0}&", includePrerelease.ToString().ToLower());
+
+            url += "semVerLevel=2.0.0";
 
             try
             {
