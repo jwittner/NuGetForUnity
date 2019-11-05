@@ -1,16 +1,17 @@
 ﻿namespace NugetForUnity
 {
-    using Ionic.Zip;
     using System;
     using System.Collections.Generic;
     using System.Diagnostics;
     using System.IO;
+    using System.IO.Compression;
     using System.Linq;
     using System.Net;
     using System.Security.Cryptography;
     using System.Text;
     using System.Text.RegularExpressions;
     using UnityEditor;
+    using UnityEditorInternal.Profiling.Memory.Experimental;
     using UnityEngine;
     using Debug = UnityEngine.Debug;
 
@@ -90,7 +91,7 @@
         /// <summary>
         /// The current .NET version being used (2.0 [actually 3.5], 4.6, etc).
         /// </summary>
-        internal static ApiCompatibilityLevel DotNetVersion;
+        public static ApiCompatibilityLevel DotNetVersion;
 
         /// <summary>
         /// Static constructor used by Unity to initialize NuGet and restore packages defined in packages.config.
@@ -106,11 +107,7 @@
                     return;
                 }
 
-#if UNITY_5_6_OR_NEWER
                 DotNetVersion = PlayerSettings.GetApiCompatibilityLevel(EditorUserBuildSettings.selectedBuildTargetGroup);
-#else
-            DotNetVersion = PlayerSettings.apiCompatibilityLevel;
-#endif
 
                 // Load the NuGet.config file
                 LoadNugetConfigFile();
@@ -788,7 +785,7 @@
         /// <summary>
         /// Uninstalls all of the currently installed packages.
         /// </summary>
-        internal static void UninstallAll()
+        public static void UninstallAll()
         {
             foreach (NugetPackage package in installedPackages.Values.ToList())
             {
@@ -1127,7 +1124,7 @@
         /// </summary>
         /// <param name="package">The identifer of the package to install.</param>
         /// <param name="refreshAssets">True to refresh the Unity asset database.  False to ignore the changes (temporarily).</param>
-        internal static bool InstallIdentifier(NugetPackageIdentifier package, bool refreshAssets = true)
+        public static bool InstallIdentifier(NugetPackageIdentifier package, bool refreshAssets = true)
         {
             NugetPackage foundPackage = GetSpecificPackage(package);
 
@@ -1151,20 +1148,11 @@
         {
             if (NugetConfigFile == null || NugetConfigFile.Verbose)
             {
-#if UNITY_5_4_OR_NEWER
                 StackTraceLogType stackTraceLogType = Application.GetStackTraceLogType(LogType.Log);
                 Application.SetStackTraceLogType(LogType.Log, StackTraceLogType.None);
-#else
-                var stackTraceLogType = Application.stackTraceLogType;
-                Application.stackTraceLogType = StackTraceLogType.None;
-#endif
                 Debug.LogFormat(format, args);
 
-#if UNITY_5_4_OR_NEWER
                 Application.SetStackTraceLogType(LogType.Log, stackTraceLogType);
-#else
-                Application.stackTraceLogType = stackTraceLogType;
-#endif
             }
         }
 
@@ -1273,19 +1261,11 @@
                 if (File.Exists(cachedPackagePath))
                 {
                     string baseDirectory = Path.Combine(NugetConfigFile.RepositoryPath, string.Format("{0}.{1}", package.Id, package.Version));
-
+                    
                     // unzip the package
-                    using (ZipFile zip = ZipFile.Read(cachedPackagePath))
+                    using (var archive = ZipFile.OpenRead(cachedPackagePath))
                     {
-                        foreach (ZipEntry entry in zip)
-                        {
-                            entry.Extract(baseDirectory, ExtractExistingFileAction.OverwriteSilently);
-                            if (NugetConfigFile.ReadOnlyPackageFiles)
-                            {
-                                FileInfo extractedFile = new FileInfo(Path.Combine(baseDirectory, entry.FileName));
-                                extractedFile.Attributes |= FileAttributes.ReadOnly;
-                            }
-                        }
+                        archive.ExtractToDirectory(baseDirectory);
                     }
 
                     // copy the .nupkg inside the Unity project
@@ -1506,7 +1486,7 @@
         /// </summary>
         /// <param name="package">The package to check if is installed.</param>
         /// <returns>True if the given package is installed.  False if it is not.</returns>
-        internal static bool IsInstalled(NugetPackageIdentifier package)
+        public static bool IsInstalled(NugetPackageIdentifier package)
         {
             bool isInstalled = false;
             NugetPackage installedPackage = null;
@@ -1661,15 +1641,22 @@
                         providerDestination = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Nuget/CredentialProviders");
                     }
 
-                    // Unzip the bundle and extract any credential provider exes
-                    using (ZipFile zip = ZipFile.Read(tempFileName))
+                    if (!Directory.Exists(providerDestination))
                     {
-                        foreach (ZipEntry entry in zip)
+                        Directory.CreateDirectory(providerDestination);
+                    }
+
+                    // Unzip the bundle and extract any credential provider exes
+                    using (var archive = ZipFile.OpenRead(tempFileName))
+                    {
+                        foreach (ZipArchiveEntry entry in archive.Entries)
                         {
-                            if (Regex.IsMatch(entry.FileName, @"^credentialprovider.+\.exe$", RegexOptions.IgnoreCase))
+                            if (Regex.IsMatch(entry.FullName, @"^credentialprovider.+\.exe$", RegexOptions.IgnoreCase))
                             {
-                                LogVerbose("Extracting {0} to {1}", entry.FileName, providerDestination);
-                                entry.Extract(providerDestination, ExtractExistingFileAction.OverwriteSilently);
+                                LogVerbose("Extracting {0} to {1}", entry.FullName, providerDestination);
+                                
+                                string path = Path.Combine(providerDestination, entry.FullName);
+                                entry.ExtractToFile(path, true);
                             }
                         }
                     }
@@ -1794,19 +1781,19 @@
                 {
                     case CredentialProviderExitCode.ProviderNotApplicable: break; // Not the right provider
                     case CredentialProviderExitCode.Failure: // Right provider, failure to get creds
-                    {
-                        Debug.LogErrorFormat("Failed to get credentials from {0}!\n\tOutput\n\t{1}\n\tErrors\n\t{2}", providerPath, output, errors);
-                        return null;
-                    }
+                        {
+                            Debug.LogErrorFormat("Failed to get credentials from {0}!\n\tOutput\n\t{1}\n\tErrors\n\t{2}", providerPath, output, errors);
+                            return null;
+                        }
                     case CredentialProviderExitCode.Success:
-                    {
-                        return JsonUtility.FromJson<CredentialProviderResponse>(output);
-                    }
+                        {
+                            return JsonUtility.FromJson<CredentialProviderResponse>(output);
+                        }
                     default:
-                    {
-                        Debug.LogWarningFormat("Unrecognized exit code {0} from {1} {2}", process.ExitCode, providerPath, process.StartInfo.Arguments);
-                        break;
-                    }
+                        {
+                            Debug.LogWarningFormat("Unrecognized exit code {0} from {1} {2}", process.ExitCode, providerPath, process.StartInfo.Arguments);
+                            break;
+                        }
                 }
             }
 

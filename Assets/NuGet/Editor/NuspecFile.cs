@@ -2,10 +2,10 @@
 {
     using System.Collections.Generic;
     using System.IO;
+    using System.IO.Compression;
     using System.Linq;
     using System.Xml;
     using System.Xml.Linq;
-    using Ionic.Zip;
 
     /// <summary>
     /// Represents a .nuspec file used to store metadata for a NuGet package.
@@ -130,18 +130,10 @@
             if (File.Exists(nupkgFilepath))
             {
                 // get the .nuspec file from inside the .nupkg
-                using (ZipFile zip = ZipFile.Read(nupkgFilepath))
+                using (var archive = ZipFile.OpenRead(nupkgFilepath))
                 {
-                    //var entry = zip[string.Format("{0}.nuspec", packageId)];
-                    var entry = zip.First(x => x.FileName.EndsWith(".nuspec"));
-
-                    using (MemoryStream stream = new MemoryStream())
-                    {
-                        entry.Extract(stream);
-                        stream.Position = 0;
-
-                        nuspec = Load(stream);
-                    }
+                    ZipArchiveEntry entry = archive.Entries.First(x => x.FullName.EndsWith(".nuspec"));
+                    nuspec = Load(entry.Open());
                 }
             }
             else
@@ -173,9 +165,11 @@
         /// <returns>The newly loaded <see cref="NuspecFile"/>.</returns>
         public static NuspecFile Load(Stream stream)
         {
-            XmlReader reader = new XmlTextReader(stream);
-            XDocument document = XDocument.Load(reader);
-            return Load(document);
+            using (XmlReader reader = new XmlTextReader(stream))
+            {
+                XDocument document = XDocument.Load(reader);
+                return Load(document);
+            }
         }
 
         /// <summary>
